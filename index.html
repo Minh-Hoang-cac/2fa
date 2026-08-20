@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mã 2FA Của Tôi</title>
+</head>
+<body style="font-family: Arial, sans-serif; text-align: center; margin-top: 50px;">
+
+    <h2>Mã xác thực 2FA của bạn là:</h2>
+    <h1 id="otp-code" style="color: blue; font-size: 48px; letter-spacing: 5px;">Đang tải...</h1>
+    <p id="countdown">Đang cập nhật...</p>
+
+    <script>
+        // Hàm giải mã Base32 chuẩn xác
+        function base32ToBytes(base32) {
+            const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+            let cleaned = base32.replace(/=+$/, '').toUpperCase();
+            let bits = 0, value = 0;
+            let output = [];
+            for (let i = 0; i < cleaned.length; i++) {
+                let idx = alphabet.indexOf(cleaned[i]);
+                if (idx === -1) throw new Error('Ký tự Base32 không hợp lệ: ' + cleaned[i]);
+                value = (value << 5) | idx;
+                bits += 5;
+                if (bits >= 8) {
+                    bits -= 8;
+                    output.push((value >> bits) & 0xFF);
+                }
+            }
+            return new Uint8Array(output);
+        }
+
+        // Tạo mã TOTP trực tiếp bằng hệ thống mã hóa tích hợp sẵn trên trình duyệt
+        async function generateTOTP(secret) {
+            const keyBytes = base32ToBytes(secret);
+            const epoch = Math.floor(Date.now() / 1000);
+            const timeStep = Math.floor(epoch / 30);
+            
+            const timeBuf = new ArrayBuffer(8);
+            const view = new DataView(timeBuf);
+            view.setUint32(4, timeStep, false);
+            
+            const cryptoKey = await window.crypto.subtle.importKey(
+                'raw', keyBytes, { name: 'HMAC', hash: { name: 'SHA-1' } }, false, ['sign']
+            );
+            
+            const signature = await window.crypto.subtle.sign('HMAC', cryptoKey, timeBuf);
+            const hmac = new Uint8Array(signature);
+            const offset = hmac[hmac.length - 1] & 0x0f;
+            const binary = ((hmac[offset] & 0x7f) << 24) |
+                           ((hmac[offset + 1] & 0xff) << 16) |
+                           ((hmac[offset + 2] & 0xff) << 8) |
+                           (hmac[offset + 3] & 0xff);
+                           
+            const otp = binary % 1000000;
+            return String(otp).padStart(6, '0');
+        }
+
+        const urlParams = new URLSearchParams(window.location.search);
+        let secret = urlParams.get('secret');
+
+        async function updateOTP() {
+            if (!secret) {
+                document.getElementById('otp-code').style.fontSize = "24px";
+                document.getElementById('otp-code').innerText = "Vui lòng nhập ?secret=... vào URL";
+                document.getElementById('countdown').innerText = "";
+                return;
+            }
+
+            try {
+                const token = await generateTOTP(secret);
+                document.getElementById('otp-code').style.color = "blue";
+                document.getElementById('otp-code').style.fontSize = "48px";
+                document.getElementById('otp-code').innerText = token;
+
+                // Đếm ngược thời gian làm mới mã
+                const remaining = 30 - (Math.floor(Date.now() / 1000) % 30);
+                document.getElementById('countdown').innerText = "Mã sẽ làm mới sau: " + remaining + " giây";
+            } catch (error) {
+                document.getElementById('otp-code').style.color = "red";
+                document.getElementById('otp-code').style.fontSize = "20px";
+                document.getElementById('otp-code').innerText = "Lỗi mã Secret: " + error.message;
+                document.getElementById('countdown').innerText = "";
+            }
+        }
+
+        updateOTP();
+        setInterval(updateOTP, 1000);
+    </script>
+</body>
+</html>
